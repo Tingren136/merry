@@ -1,0 +1,7 @@
+{
+  "description": "Christmas Tree with Three.js and MediaPipe",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "name": "Christmas Tree"
+}
