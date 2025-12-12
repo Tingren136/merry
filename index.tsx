@@ -374,16 +374,41 @@ class ChristmasApp {
         this.scene.add(this.snowSystem);
     }
 
-    // Updated to handle UI thumbnail and ID management
+    // Updated to handle Aspect Ratio
     addPhotoToScene(texture: any, imgDataUrl: string | null) {
-        const frameGeo = new THREE.BoxGeometry(3, 3.5, 0.1);
+        // Default size logic if no image data yet (e.g. placeholder)
+        let w = 2.6;
+        let h = 2.6;
+
+        // Calculate Aspect Ratio if image is loaded
+        if (texture.image && texture.image.width && texture.image.height) {
+            const aspect = texture.image.width / texture.image.height;
+            const maxSize = 2.5; // Slightly smaller than frame to fit inside
+            if (aspect > 1) {
+                // Landscape
+                w = maxSize;
+                h = maxSize / aspect;
+            } else {
+                // Portrait or Square
+                h = maxSize;
+                w = maxSize * aspect;
+            }
+        }
+        
+        // Dynamic Geometry creation
+        const frameW = w + 0.4;
+        const frameH = h + 0.4;
+        const frameGeo = new THREE.BoxGeometry(frameW, frameH, 0.1);
         const frameMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.9 });
+        
         const photoMat = new THREE.MeshBasicMaterial({ map: texture, color: 0xcccccc });
+        const planeGeo = new THREE.PlaneGeometry(w, h);
         
         const frameMesh = new THREE.Mesh(frameGeo, frameMat);
-        const planeGeo = new THREE.PlaneGeometry(2.6, 2.6);
         const planeMesh = new THREE.Mesh(planeGeo, photoMat);
-        planeMesh.position.set(0, 0.2, 0.06); 
+        
+        // Z-offset slightly to prevent z-fighting with frame
+        planeMesh.position.set(0, 0, 0.06); 
         frameMesh.add(planeMesh);
 
         const p = new Particle(frameMesh, 'PHOTO');
@@ -412,14 +437,14 @@ class ChristmasApp {
         // Add to Shuffle Pool
         this.availablePhotoIds.push(uniqueId);
 
-        // UI Management for Gallery
+        // UI Management for Gallery (Sidebar)
         if (imgDataUrl) {
             this.createPhotoUI(uniqueId, imgDataUrl);
         }
     }
 
     createPhotoUI(id: number, src: string) {
-        const gallery = document.getElementById('photo-gallery');
+        const gallery = document.getElementById('gallery-sidebar');
         if (!gallery) return;
 
         const div = document.createElement('div');
@@ -450,9 +475,13 @@ class ChristmasApp {
         // 1. Remove from Scene
         this.mainGroup.remove(p.mesh);
         
-        // 2. Dispose resources (Basic disposal)
+        // 2. Dispose resources
         if (p.mesh.geometry) p.mesh.geometry.dispose();
-        
+        // Traverse children to dispose plane geometry too
+        p.mesh.children.forEach((c: any) => {
+            if(c.geometry) c.geometry.dispose();
+        });
+
         // 3. Remove from Array
         this.particles.splice(index, 1);
 
@@ -655,8 +684,10 @@ function App() {
         if (e.key.toLowerCase() === 'h') {
             const title = document.querySelector('#title');
             const ui = document.querySelector('#ui-container');
+            const gallery = document.querySelector('#gallery-sidebar');
             if(title) title.classList.toggle('ui-hidden');
             if(ui) ui.classList.toggle('ui-hidden');
+            if(gallery) gallery.classList.toggle('ui-hidden');
         }
     };
     
