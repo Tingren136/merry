@@ -176,6 +176,7 @@ class ChristmasApp {
     handLandmarker: any;
     webcamRunning: boolean;
     photoCount: number;
+    availablePhotoIds: number[]; // For Shuffle Logic
 
     constructor() {
         this.container = document.body;
@@ -187,6 +188,7 @@ class ChristmasApp {
         this.starMesh = null;
         this.photoCount = 0;
         this.snowVelocities = [];
+        this.availablePhotoIds = [];
     }
 
     async init() {
@@ -330,7 +332,8 @@ class ChristmasApp {
             p.treePos.set(Math.cos(angle) * r, y, Math.sin(angle) * r);
 
             if (i === 0) {
-                this.addPhotoToScene(this.photoTextures[0]);
+                // Initial placeholder photo
+                this.addPhotoToScene(this.photoTextures[0], null);
             }
 
             mesh.userData.id = i; 
@@ -371,7 +374,8 @@ class ChristmasApp {
         this.scene.add(this.snowSystem);
     }
 
-    addPhotoToScene(texture: any) {
+    // Updated to handle UI thumbnail and ID management
+    addPhotoToScene(texture: any, imgDataUrl: string | null) {
         const frameGeo = new THREE.BoxGeometry(3, 3.5, 0.1);
         const frameMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.9 });
         const photoMat = new THREE.MeshBasicMaterial({ map: texture, color: 0xcccccc });
@@ -384,6 +388,7 @@ class ChristmasApp {
 
         const p = new Particle(frameMesh, 'PHOTO');
         
+        // Find position on ribbon
         if (this.ribbonCurve) {
             const t = (0.1 + (this.photoCount * 0.15)) % 0.95; 
             const point = this.ribbonCurve.getPointAt(t);
@@ -396,11 +401,76 @@ class ChristmasApp {
              p.treePos.set(0, 0, 20);
         }
 
-        frameMesh.userData.id = 10000 + this.particles.length; 
+        const uniqueId = 10000 + this.particles.length + Math.floor(Math.random() * 99999);
+        frameMesh.userData.id = uniqueId; 
+        
         this.mainGroup.add(frameMesh);
         this.particles.push(p);
         this.photoTextures.push(texture);
         this.photoCount++;
+
+        // Add to Shuffle Pool
+        this.availablePhotoIds.push(uniqueId);
+
+        // UI Management for Gallery
+        if (imgDataUrl) {
+            this.createPhotoUI(uniqueId, imgDataUrl);
+        }
+    }
+
+    createPhotoUI(id: number, src: string) {
+        const gallery = document.getElementById('photo-gallery');
+        if (!gallery) return;
+
+        const div = document.createElement('div');
+        div.className = 'photo-item';
+        div.id = `photo-${id}`;
+        
+        const img = document.createElement('img');
+        img.src = src;
+        img.className = 'photo-thumb';
+        
+        const delBtn = document.createElement('button');
+        delBtn.className = 'delete-btn';
+        delBtn.innerHTML = '&times;';
+        delBtn.onclick = () => this.removePhoto(id);
+
+        div.appendChild(img);
+        div.appendChild(delBtn);
+        gallery.appendChild(div);
+    }
+
+    removePhoto(id: number) {
+        // Find Particle
+        const index = this.particles.findIndex(p => p.mesh.userData.id === id);
+        if (index === -1) return;
+
+        const p = this.particles[index];
+
+        // 1. Remove from Scene
+        this.mainGroup.remove(p.mesh);
+        
+        // 2. Dispose resources (Basic disposal)
+        if (p.mesh.geometry) p.mesh.geometry.dispose();
+        
+        // 3. Remove from Array
+        this.particles.splice(index, 1);
+
+        // 4. Remove from UI
+        const el = document.getElementById(`photo-${id}`);
+        if (el) el.remove();
+
+        // 5. Update Shuffle Pool
+        const poolIndex = this.availablePhotoIds.indexOf(id);
+        if (poolIndex > -1) {
+            this.availablePhotoIds.splice(poolIndex, 1);
+        }
+
+        // 6. Handle Active Focus Case
+        if (STATE.focusTargetIndex === id) {
+            STATE.focusTargetIndex = -1;
+            STATE.mode = CONFIG.modes.TREE; // Revert to tree mode if focusing on deleted item
+        }
     }
 
     async setupComputerVision() {
@@ -456,11 +526,25 @@ class ChristmasApp {
             if (pinchDist < 0.05) {
                 STATE.mode = CONFIG.modes.FOCUS;
                 detectedGesture = "Pinch (Focus)";
+                
+                // --- SHUFFLE LOGIC IMPLEMENTATION ---
+                // If currently not focused on a valid photo, pick a new one
                 if (STATE.focusTargetIndex === -1) {
-                    const photos = this.particles.filter(p => p.type === 'PHOTO');
-                    if (photos.length > 0) {
-                        const randomPhoto = photos[Math.floor(Math.random() * photos.length)];
-                        STATE.focusTargetIndex = randomPhoto.mesh.userData.id;
+                    const allPhotos = this.particles.filter(p => p.type === 'PHOTO');
+                    if (allPhotos.length > 0) {
+                        // Refill pool if empty
+                        if (this.availablePhotoIds.length === 0) {
+                            this.availablePhotoIds = allPhotos.map(p => p.mesh.userData.id);
+                        }
+
+                        // Pick random from available
+                        const randIdx = Math.floor(Math.random() * this.availablePhotoIds.length);
+                        const nextId = this.availablePhotoIds[randIdx];
+
+                        // Remove chosen ID from pool (so it doesn't repeat until reset)
+                        this.availablePhotoIds.splice(randIdx, 1);
+                        
+                        STATE.focusTargetIndex = nextId;
                     }
                 }
             } else if (isVictory) {
@@ -576,18 +660,28 @@ function App() {
         }
     };
     
-    const fileInput = document.getElementById('imageInput');
+    const fileInput = document.getElementById('imageInput') as HTMLInputElement;
     const handleFile = (e: any) => {
-        const f = e.target.files[0];
-        if(!f) return;
-        const reader = new FileReader();
-        reader.onload = (ev: any) => {
-            new THREE.TextureLoader().load(ev.target.result, (t: any) => {
-                t.colorSpace = THREE.SRGBColorSpace;
-                if(appRef.current) appRef.current.addPhotoToScene(t);
-            });
-        };
-        reader.readAsDataURL(f);
+        // Handle Multiple Files
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
+
+        // Iterate through all selected files
+        Array.from(files).forEach((f: any) => {
+            const reader = new FileReader();
+            reader.onload = (ev: any) => {
+                const result = ev.target.result;
+                new THREE.TextureLoader().load(result, (t: any) => {
+                    t.colorSpace = THREE.SRGBColorSpace;
+                    // Pass the base64 string for UI generation
+                    if(appRef.current) appRef.current.addPhotoToScene(t, result);
+                });
+            };
+            reader.readAsDataURL(f);
+        });
+
+        // Reset input so same files can be selected again if needed
+        e.target.value = '';
     };
 
     document.addEventListener('keydown', handleKey);
